@@ -111,11 +111,6 @@ $ make qemu
 
 HAWX kernel is booting
 
-UART initialization test...PASSED
-UART flush test...PASSED
-Interrupt driven output test...PASSED
-Type the word "PASSED" and press enter: PASSED
-Interrupt driven input test...PASSED
 Writing to disk...PASSED
 Reading from disk...PASSED
 Empty port disk write...PASSED
