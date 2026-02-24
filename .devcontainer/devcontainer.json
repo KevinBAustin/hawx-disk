@@ -1,11 +1,10 @@
-{
+ {
     "waitFor" : "onCreateCommand",
     "updateContentCommand": "",
     "postCreateCommand": ".devcontainer/setup.sh",
     "customizations": {
         "codespaces": {
           "openFiles": []
-          }
         },
         "vscode": {
           "extensions": [
