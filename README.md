@@ -78,12 +78,12 @@ to go ahead and implement this now.
 The disk driver will respond to these messages as each command completes. The
 response messages have the following format:
 
-   +-+-+-------+
-   |M|S|BLOCKID|
-   +-+-+-------+
-   M        - 1 Character, echoing the specified mode.
-   S        - 1 Character, S for success, F for failure
-   Block ID - 7 Characters Decimal Block ID to operate on
+    +-+-+-------+
+    |M|S|BLOCKID|
+    +-+-+-------+
+    M        - 1 Character, echoing the specified mode.
+    S        - 1 Character, S for success, F for failure
+    Block ID - 7 Characters Decimal Block ID to operate on
 
 These messages are written by the `write_disk_response` function. Now, 
 the question you should be asking yourself is "From where do we get the
