@@ -100,6 +100,20 @@ get_disk_msg()
   // HINT: The atoi function in string.h may be useful for converting
   //       strings to integers.
   // YOUR CODE HERE
+  if(ports[PORT_DISKCMD].count < 16){
+    msg.mode = 'N';
+  }else{
+    msg.mode = ports[PORT_DISKCMD].buffer[0];
+    for(int i = 1; i < 8; i++){
+      msg.blockid += atoi(ports[PORT_DISKCMD].buffer[i]);
+    }
+    for(int i = 8; i < 12; i++){
+      msg.data_port += atoi(ports[PORT_DISKCMD].buffer[i]);
+    }
+    for(int i = 12; i < ports[PORT_DISKCMD].count; i++){
+      msg.msg_port += atoi(ports[PORT_DISKCMD].buffer[i]);
+    }
+  }
 
   return msg;
 }
@@ -118,11 +132,29 @@ write_disk_response(char status, int id)
   //   MODE  - 1 Character
   //   STATUS - 1 Character
   //   BLOCKID - 7 Characters
-  // The response shoudl be written to the message port specified
+  // The response should be written to the message port specified
   // in disk.info[id].
   // HINT: The pprintf function specified in console.h will come in
   //       handy here!
   // YOUR CODE HERE
+  /*
+  disk.info[id].mode = ports[PORT_DISKCMD].buffer[0];
+  disk.info[id].status = status;
+  for(int i = 2; i < 9; i++){
+    disk.info[id].blockid += ports[PORT_DISKCMD].buffer[i];
+  }*/
+ 
+  /*
+  ports[PORT_DISKCMD].buffer[0] = disk.info[id].mode;
+  ports[PORT_DISKCMD].buffer[1] = status;
+  for(int i = 2; i < ports[PORT_DISKCMD].count; i++){
+    disk.info[id].blockid = ports[PORT_DISKCMD].buffer[i];
+  }*/
+  disk.info[id].mode = disk.buffer[id][0];
+  disk.info[id].status = status;
+  for(int i = 2; i < 9; i++){
+    disk.info[id].blockid += disk.buffer[id][i];
+  }
 }
 
 /*
@@ -144,6 +176,94 @@ void virtio_disk_init(void)
   // Above all, be sure to read the corresponding code and chapters in xv6
   // to understand what is happening here.
   // YOUR CODE HERE
+  
+  uint32 status = 0;
+
+  if(*R(VIRTIO_MMIO_MAGIC_VALUE) != 0x74726976 ||
+     *R(VIRTIO_MMIO_VERSION) != 2 ||
+     *R(VIRTIO_MMIO_DEVICE_ID) != 2 ||
+     *R(VIRTIO_MMIO_VENDOR_ID) != 0x554d4551){
+    panic("could not find virtio disk");
+  }
+  
+  // reset device
+  *R(VIRTIO_MMIO_STATUS) = status;
+
+  // set ACKNOWLEDGE status bit
+  status |= VIRTIO_CONFIG_S_ACKNOWLEDGE;
+  *R(VIRTIO_MMIO_STATUS) = status;
+
+  // set DRIVER status bit
+  status |= VIRTIO_CONFIG_S_DRIVER;
+  *R(VIRTIO_MMIO_STATUS) = status;
+
+  // negotiate features
+  uint64 features = *R(VIRTIO_MMIO_DEVICE_FEATURES);
+  features &= ~(1 << VIRTIO_BLK_F_RO);
+  features &= ~(1 << VIRTIO_BLK_F_SCSI);
+  features &= ~(1 << VIRTIO_BLK_F_CONFIG_WCE);
+  features &= ~(1 << VIRTIO_BLK_F_MQ);
+  features &= ~(1 << VIRTIO_F_ANY_LAYOUT);
+  features &= ~(1 << VIRTIO_RING_F_EVENT_IDX);
+  features &= ~(1 << VIRTIO_RING_F_INDIRECT_DESC);
+  *R(VIRTIO_MMIO_DRIVER_FEATURES) = features;
+
+  // tell device that feature negotiation is complete.
+  status |= VIRTIO_CONFIG_S_FEATURES_OK;
+  *R(VIRTIO_MMIO_STATUS) = status;
+
+  // re-read status to ensure FEATURES_OK is set.
+  status = *R(VIRTIO_MMIO_STATUS);
+  if(!(status & VIRTIO_CONFIG_S_FEATURES_OK))
+    panic("virtio disk FEATURES_OK unset");
+
+  // initialize queue 0.
+  *R(VIRTIO_MMIO_QUEUE_SEL) = 0;
+
+  // ensure queue 0 is not in use.
+  if(*R(VIRTIO_MMIO_QUEUE_READY))
+    panic("virtio disk should not be ready");
+
+  // check maximum queue size.
+  uint32 max = *R(VIRTIO_MMIO_QUEUE_NUM_MAX);
+  if(max == 0)
+    panic("virtio disk has no queue 0");
+  if(max < NUM)
+    panic("virtio disk max queue too short");
+
+  // allocate and zero queue memory.
+  disk.desc = vm_page_alloc();
+  disk.avail = vm_page_alloc();
+  disk.used = vm_page_alloc();
+  if(!disk.desc || !disk.avail || !disk.used)
+    panic("virtio disk kalloc");
+  memset(disk.desc, 0, PGSIZE);
+  memset(disk.avail, 0, PGSIZE);
+  memset(disk.used, 0, PGSIZE);
+
+  // set queue size.
+  *R(VIRTIO_MMIO_QUEUE_NUM) = NUM;
+
+  // write physical addresses.
+  *R(VIRTIO_MMIO_QUEUE_DESC_LOW) = (uint64)disk.desc;
+  *R(VIRTIO_MMIO_QUEUE_DESC_HIGH) = (uint64)disk.desc >> 32;
+  *R(VIRTIO_MMIO_DRIVER_DESC_LOW) = (uint64)disk.avail;
+  *R(VIRTIO_MMIO_DRIVER_DESC_HIGH) = (uint64)disk.avail >> 32;
+  *R(VIRTIO_MMIO_DEVICE_DESC_LOW) = (uint64)disk.used;
+  *R(VIRTIO_MMIO_DEVICE_DESC_HIGH) = (uint64)disk.used >> 32;
+
+  // queue is ready.
+  *R(VIRTIO_MMIO_QUEUE_READY) = 0x1;
+
+  // all NUM descriptors start out unused.
+  for(int i = 0; i < NUM; i++)
+    disk.free[i] = 1;
+
+  // tell device we're completely ready.
+  status |= VIRTIO_CONFIG_S_DRIVER_OK;
+  *R(VIRTIO_MMIO_STATUS) = status;
+
+  // plic.c and trap.c arrange for interrupts from VIRTIO0_IRQ.
 }
 
 // find a free descriptor, mark it non-free, return its index.
@@ -251,6 +371,72 @@ void virtio_disk_start()
   //   7. Tell the device the first index in our chain of descriptors, and
   //      tell the device another avail ring entry is available.
   // YOUR CODE HERE
+  
+  if(ports[PORT_DISKCMD].count < 16)//Checks to see if there is a disk msg
+    return;
+
+  //allocates three descriptors  
+  int idx[3];
+  if(alloc3_desc(idx) == -1)
+    return;
+  
+  //gets disk msg
+  struct disk_msg msg = get_disk_msg();
+
+  //Verifes the validity of the message
+  if(msg.mode == 'N'){
+    disk.info[idx[0]].msg_port = "fail";//Probably meant to use a VIRTIO_MMIO..., but can't figure out what it is
+    free3_desc(idx);
+    return;
+  }
+
+  int sector = msg.blockid * (BSIZE / 512);//Calculates sector
+
+  disk.info[idx[0]].blockid = msg.blockid;
+  disk.info[idx[0]].data_port = msg.data_port;
+  disk.info[idx[0]].msg_port = msg.msg_port;
+  disk.info[idx[0]].mode = msg.mode;
+  
+  //Disk formatting
+  struct virtio_blk_req *buf = &disk.ops[idx[0]];
+  if(msg.mode == 'W')
+    buf->type = VIRTIO_BLK_T_OUT; // write the disk
+  else
+    buf->type = VIRTIO_BLK_T_IN; // read the disk
+  buf->reserved = 0;
+  buf->sector = sector;
+
+  disk.desc[idx[0]].addr = (uint64) buf;
+  disk.desc[idx[0]].len = sizeof(struct virtio_blk_req);
+  disk.desc[idx[0]].flags = VRING_DESC_F_NEXT;
+  disk.desc[idx[0]].next = idx[1];
+
+  disk.desc[idx[1]].addr = (uint64) disk.info[idx[1]].data_port;
+  disk.desc[idx[1]].len = BSIZE;
+  if(msg.mode == 'W')
+    disk.desc[idx[1]].flags = 0; // device reads b->data
+  else
+    disk.desc[idx[1]].flags = VRING_DESC_F_WRITE; // device writes b->data
+  disk.desc[idx[1]].flags |= VRING_DESC_F_NEXT;
+  disk.desc[idx[1]].next = idx[2];
+
+  disk.info[idx[0]].status = 0xff; // device writes 0 on success
+  disk.desc[idx[2]].addr = (uint64) &disk.info[idx[0]].status;
+  disk.desc[idx[2]].len = 1;
+  disk.desc[idx[2]].flags = VRING_DESC_F_WRITE; // device writes the status
+  disk.desc[idx[2]].next = 0;
+
+  // tell the device the first index in our chain of descriptors.
+  disk.avail->ring[disk.avail->idx % NUM] = idx[0];
+
+  __sync_synchronize();
+
+  // tell the device another avail ring entry is available.
+  disk.avail->idx += 1; // not % NUM ...
+
+  __sync_synchronize();
+
+  *R(VIRTIO_MMIO_QUEUE_NOTIFY) = 0; // value is queue number
 }
 
 void virtio_disk_intr()
@@ -272,4 +458,22 @@ void virtio_disk_intr()
   //        the message ports.Be sure to read the corresponding code in xv6
   //        to understand what is happening.
   // YOUR CODE HERE
+  *R(VIRTIO_MMIO_INTERRUPT_ACK) = *R(VIRTIO_MMIO_INTERRUPT_STATUS) & 0x3;
+
+  __sync_synchronize();
+
+  while(disk.used_idx != disk.used->idx){
+    __sync_synchronize();
+    int id = disk.used->ring[disk.used_idx % NUM].id;
+
+    if(disk.info[id].status != 0)
+      panic("virtio_disk_intr status");
+
+    if(disk.info[id].mode == 'R' && disk.info[id].status == 'S'){
+      disk.info[id].data_port = disk.buffer[id];
+      disk.info[id].msg_port = "success";//Probably meant to use a VIRTIO_MMIO..., but can't figure out what it is
+    }
+    wakeup(disk.info[id]);
+    disk.used_idx += 1;
+  }
 }
